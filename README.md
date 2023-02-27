@@ -1,11 +1,14 @@
-Deploy SLO for Management Zone
+# Deploy cmd
+
 Export the variable:
 
- export NEW_CLI=1
- export MyTenant=<MyTenant>
- export MyToken=<MyToken>
- export MZ=<MZ-name>
+	 export NEW_CLI=2
+	 export MyTenant=<MyTenant>
+	 export MyToken=<MyToken>
+	 export MZ=<MZ-name>
+		 
+
 Deploy the configuration:
 
-cd;cd dynatrace-lab/lab-onboarding;
-./monaco deploy -e=environments.yaml deploy-slo
+	cd;cd dynatrace-lab/lab-onboarding;
+	./monaco deploy -e=environments.yaml deploy
