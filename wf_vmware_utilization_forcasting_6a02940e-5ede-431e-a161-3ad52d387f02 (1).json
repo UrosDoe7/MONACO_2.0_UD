@@ -1,0 +1,85 @@
+{
+  "id": "6a02940e-5ede-431e-a161-3ad52d387f02",
+  "title": "VMware Utilization Forcasting",
+  "tasks": {
+    "analyze_result": {
+      "name": "analyze_result",
+      "action": "dynatrace.automations:run-javascript",
+      "description": "Build a custom task running js Code",
+      "input": {
+        "script": "import { execution } from '@dynatrace-sdk/automation-utils';\n\nconst THRESHOLD = 75;\nconst TASK_ID = 'forecast_cluster_memory_usage';\n\nexport default async function ({ executionId }) {\n    const exe = await execution(executionId);\n    const predResult = await exe.result(TASK_ID);\n    const result = predResult['result'];\n    const predictionSummary = { violations: [] };\n\n    console.log(\"Total number of predicted lines: \" + result.output.length);\n\n    // Check if prediction was successful.\n    if (result && result.executionStatus === 'COMPLETED') {\n        console.log('Prediction was successful.');\n\n        // Iterate over each prediction output.\n        for (let i = 0; i < result.output.length; i++) {\n            const prediction = result.output[i];\n\n            if (prediction.analysisStatus === 'OK' && prediction.forecastQualityAssessment === 'VALID') {\n                const records = prediction.timeSeriesDataWithPredictions.records[0];\n                const lowerPredictions = records['dt.davis.forecast:lower'];\n\n                // Find the first index where the forecasted value exceeds the threshold.\n                const firstViolationIndex = lowerPredictions.findIndex(value => value > THRESHOLD);\n\n                if (firstViolationIndex !== -1) {\n                    const timestamp = records.timeframe.start; // ISO 8601 format\n                    const intervalNanoseconds = parseInt(records.interval); // Interval in nanoseconds\n                    const intervalMilliseconds = intervalNanoseconds / 1e6; // Convert to milliseconds\n\n                    // Calculate the violation time\n                    const violationTime = new Date(new Date(timestamp).getTime() + firstViolationIndex * intervalMilliseconds);\n\n                    const violationDetails = {\n                        violationTime: violationTime.toISOString(),\n                        violationValue: lowerPredictions[firstViolationIndex],\n                        metricDisplayName: prediction.timeSeriesDataWithPredictions.metadata?.metrics[0]?.displayName || 'Unknown Metric',\n                        clusterName: records['dt.entity.vmware:cluster.name'] || 'Unknown clusterName'\n                    };\n\n                    predictionSummary.violations.push(violationDetails);\n\n                    // Log the summarized violation details\n                    console.log(`Violation detected for metric: ${violationDetails.metricDisplayName}`);\n                    console.log(` - dt.entity.vmware:cluster.name: ${violationDetails.clusterName}`);\n                    console.log(` - Violation Time: ${violationDetails.violationTime}`);\n                    console.log(` - Value at Violation: ${violationDetails.violationValue}`);\n                }\n            }\n        }\n\n        if (predictionSummary.violations.length === 0) {\n            console.log('No violations found :)');\n        } else {\n            console.log(`${predictionSummary.violations.length} violations detected!`);\n        }\n\n        return predictionSummary;\n    } else {\n        console.log('Prediction run failed!');\n    }\n}\n"
+      },
+      "position": {
+        "x": 0,
+        "y": 2
+      },
+      "predecessors": [
+        "forecast_cluster_memory_usage"
+      ],
+      "conditions": {
+        "states": {
+          "forecast_cluster_memory_usage": "OK"
+        }
+      }
+    },
+    "create_problem_event": {
+      "name": "create_problem_event",
+      "action": "dynatrace.automations:run-javascript",
+      "description": "Build a custom task running js Code",
+      "input": {
+        "script": "// Import required modules\nimport { execution } from '@dynatrace-sdk/automation-utils';\nimport { eventsClient, EventIngestEventType } from '@dynatrace-sdk/client-classic-environment-v2';\n\nexport default async function ({ executionId }) {\n  // Task and event initialization\n  const TASK_ID = 'analyze_result';\n\n  // Fetch execution results\n  const exe = await execution(executionId);\n  const predResult = await exe.result(TASK_ID);\n  const violations = predResult['violations']; // This is the array containing violations\n\n  // Check if there are violations to process\n  if (!violations || violations.length === 0) {\n    console.log('No violations found to process.');\n    return { triggeredBy: exe.trigger };\n  }\n\n  // Loop through each violation and create an event\n  for (const violation of violations) {\n    try {\n      const eventPayload = {\n        eventType: EventIngestEventType.ResourceContentionEvent,\n        title: `Violation Detected on ${violation.clusterName}: ${violation.metricDisplayName}`,\n        entitySelector: `type(vmware:cluster),entityName.equals(${violation.clusterName})`,\n        properties: {\n          \"cluster.name\": violation.clusterName,\n          //metric: violation.metricDisplayName,\n          value: violation.violationValue.toString(),\n          \"violation.time\": violation.violationTime,\n          \"event.provider\": \"davis.forecast\",\n          \"dt.event.description\": `\n          Violation Details:\n          - Cluster Name: ${violation.clusterName}\n          - Violation Time: ${violation.violationTime}\n          - Violation Value: ${violation.violationValue}\n          \n          This metric exceeded the defined threshold, and immediate attention may be required.\n        `,\n        },\n      };\n\n      // Log the payload being sent\n      console.log(`Sending event for clusterName: ${violation.clusterName}`);\n      console.log('Event Payload:', eventPayload);\n\n      // Send the event via Events API\n      const response = await eventsClient.createEvent({ body: eventPayload });\n\n      // Log the response from the API\n      console.log(`Response for clusterName: ${violation.clusterName}`);\n      console.log('Status:', response.status);\n      console.log('Data:', response.data);\n    } catch (error) {\n      // Log detailed error information\n      console.error(`Failed to create event for clusterName: ${violation.clusterName}`);\n      console.error('Error details:', error.message || error);\n    }\n  }\n\n  // Return execution context\n  console.log('All events processed.');\n  return { triggeredBy: exe.trigger };\n}\n"
+      },
+      "position": {
+        "x": 0,
+        "y": 3
+      },
+      "predecessors": [
+        "analyze_result"
+      ],
+      "conditions": {
+        "states": {
+          "analyze_result": "OK"
+        }
+      }
+    },
+    "forecast_cluster_memory_usage": {
+      "name": "forecast_cluster_memory_usage",
+      "action": "dynatrace.davis.workflow.actions:davis-analyze",
+      "description": "Execute a customizable AI/ML task using Davis® analyzers",
+      "input": {
+        "body": {
+          "nPaths": 200,
+          "useModelCache": true,
+          "forecastOffset": 0,
+          "timeSeriesData": "timeseries by: {`dt.entity.vmware:cluster` }, filter: { cluster.name != \"No Cluster\" }, {\n  mem_capacity = avg(vmware.cluster.mem.capacity),\n  mem_used= avg(vmware.cluster.mem.used)  \n  }\n| fieldsAdd  mem_perc_used = 100*mem_used[]/mem_capacity[]\n| fieldsRemove mem_used, mem_capacity\n| fieldsAdd entityName(`dt.entity.vmware:cluster`)",
+          "forecastHorizon": 200,
+          "generalParameters": {
+            "timeframe": {
+              "endTime": "now",
+              "startTime": "now-90d"
+            },
+            "logVerbosity": "WARNING",
+            "resolveDimensionalQueryData": false
+          },
+          "coverageProbability": 0.95,
+          "applyZeroLowerBoundHeuristic": true
+        },
+        "analyzerName": "dt.statistics.GenericForecastAnalyzer"
+      },
+      "position": {
+        "x": 0,
+        "y": 1
+      },
+      "predecessors": [],
+      "timeout": 900
+    }
+  },
+  "description": "",
+  "actor": "3336b762-e77d-4862-8330-a852fb1b0123",
+  "owner": "3336b762-e77d-4862-8330-a852fb1b0123",
+  "ownerType": "USER",
+  "isPrivate": true,
+  "trigger": {},
+  "schemaVersion": 3,
+  "type": "STANDARD"
+}
